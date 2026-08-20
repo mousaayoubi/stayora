@@ -58,10 +58,33 @@ async function post(path, body) {
  */
 export async function searchDestinations(query, type = "DESTINATION") {
   const data = await post("/mcp/hotel/search-destinations", { query, type });
-  return {
-    candidates: data.result ?? [],
-    recommended: data._recommendedDestination ?? data._citySearchDestination ?? null,
-  };
+  const candidates = data.result ?? [];
+
+  // RouteStack's docs show a convenience `_recommendedDestination` field
+  // with flat destinationId/lat/long - in practice (live account) that
+  // field is absent, and candidates instead use `id` + nested
+  // `coordinates: {lat, long}`, with the top/broadest matches often having
+  // `coordinates: null`. Heuristic: take the first candidate, in the API's
+  // own relevance order, that actually has usable coordinates. A sharper
+  // "did the user mean this specific city vs. landmark vs. property" match
+  // can replace this once more real query patterns are seen.
+  const withCoords = candidates.find(
+    (c) => c.coordinates?.lat != null && c.coordinates?.long != null
+  );
+
+  const recommended =
+    data._recommendedDestination ??
+    data._citySearchDestination ??
+    (withCoords && {
+      destinationId: withCoords.id,
+      lat: withCoords.coordinates.lat,
+      long: withCoords.coordinates.long,
+      type: withCoords.type,
+      fullName: withCoords.fullName,
+    }) ??
+    null;
+
+  return { candidates, recommended };
 }
 
 /**

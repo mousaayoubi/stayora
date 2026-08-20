@@ -5,14 +5,11 @@
  * short-lived (24h) bearer JWT that every other /mcp/* call needs as
  * `Authorization: Bearer <token>`.
  *
- * Request shape per RouteStack's docs:
+ * Request shape per RouteStack's "How To Use Your Keys" guide:
  *   { apiKey, timestamp (unix seconds), nonce, hmac }
- * where hmac signs "apiKey:timestamp:nonce" with the partner secret key.
- *
- * RouteStack's docs don't state the HMAC algorithm/encoding explicitly -
- * HMAC-SHA256, hex-encoded is assumed here as the conventional default. If
- * the live API rejects it with an auth error, this is the first place to
- * check against RouteStack's actual signing example.
+ * where hmac is HMAC-SHA256 of "apiKey:timestamp:nonce" using the partner
+ * secret key, base64url-encoded (not hex - confirmed against RouteStack's
+ * own Node.js sample, which does `.digest('base64url')`).
  */
 import crypto from "node:crypto";
 import { env } from "../config/env.js";
@@ -23,11 +20,11 @@ let cachedToken = null; // { token, expiresAt }
 
 function signRequest() {
   const timestamp = Math.floor(Date.now() / 1000);
-  const nonce = crypto.randomBytes(16).toString("hex");
+  const nonce = crypto.randomUUID();
   const hmac = crypto
     .createHmac("sha256", env.routeStackSecretKey)
     .update(`${env.routeStackApiKey}:${timestamp}:${nonce}`)
-    .digest("hex");
+    .digest("base64url");
 
   return { apiKey: env.routeStackApiKey, timestamp, nonce, hmac };
 }
