@@ -58,21 +58,25 @@ npm run db:migrate      # applies db/schema.sql - needs DATABASE_URL set (free N
 npm start
 ```
 
-`db:migrate` and Postgres in general are not required to start the server or use `/chat`/
-`/reserve` - nothing in the live request path persists to the database yet (see PROGRESS.md).
+`db:migrate` and Postgres in general are not required to start the server - `/chat`/`/reserve`
+both degrade gracefully (no persistence, `sessionId: null`) if `DATABASE_URL` isn't set.
 
-`POST /chat` with `{ "message": "a hotel in Dubai for 2 next weekend" }` returns the parsed
-intent, the full live RouteStack search result, an `enriched` array (top 3 hotels with rates +
-cancellation policy), and a `recommendation` object: `{ranked: [{hotelId, rank, headline,
-tradeoff, caveats}], summary}`. A Recommend failure degrades to `recommendation: null` +
-`recommendationError` rather than failing the whole request - the search/enrich results are
-still useful on their own.
+`POST /chat` with `{ "message": "a hotel in Dubai for 2 next weekend", "travelerId": "<uuid>" }`
+(`travelerId` optional - a bare anonymous client-generated UUID, no accounts) returns the parsed
+intent, the full live RouteStack search result, a `sessionId` (if `DATABASE_URL` is set - `null`
+otherwise), an `enriched` array (top 3 hotels with rates + cancellation policy), and a
+`recommendation` object: `{ranked: [{hotelId, rank, headline, tradeoff, caveats}], summary}`. A
+Recommend failure degrades to `recommendation: null` + `recommendationError` rather than failing
+the whole request - the search/enrich results are still useful on their own.
 
-`POST /reserve` with `{hotelId, correlationId, token, checkIn, checkOut, roomId,
-recommendationId, publishedRate}` (all from a prior `/chat` response's `enriched[].rates`)
-re-checks the price and returns it - add `confirm: true` (same body) to get a real payment
-portal URL. Deliberately two calls, not a flag a client could accidentally set: see "Reserve
-agent" in `PROGRESS.md`.
+`POST /reserve` with `{sessionId, hotelId, hotelName?, roomId, recommendationId, publishedRate}`
+(`sessionId` from `/chat`; resolves `correlationId`/`token`/dates from the persisted session -
+or pass those four explicitly instead of `sessionId`, e.g. if `DATABASE_URL` isn't set)
+re-checks the price and returns it plus a `reservationId`. Add `confirm: true` and that same
+`reservationId` (same body otherwise) to get a real payment portal URL - the same reservation
+row moves from `price_checked` to `ready_for_payment` rather than a duplicate being created.
+Deliberately two calls, not a flag a client could accidentally set: see "Reserve agent" in
+`PROGRESS.md`.
 
 `npm run mcp-server` runs the RouteStack MCP server standalone (stdio) for debugging with an
 MCP inspector, separate from the Express app spawning it automatically.
@@ -109,9 +113,13 @@ MCP inspector, separate from the Express app spawning it automatically.
   `check_in: "2026-08-28"` round-tripped as `"2026-08-27T21:00:00.000Z"`. Fixed in
   `src/db/pool.js` by returning the raw `YYYY-MM-DD` string instead of a `Date` object for DATE
   columns - matches the plain-string dates used everywhere else in the app already.
-- Nothing in `/chat` or `/reserve` writes to Postgres yet - `src/db/repository.js` is built and
-  verified live (insert/read/update/upsert/constraint enforcement all confirmed against a real
-  Supabase DB) but not yet called from the request path. That's the natural next step.
+- `/chat` and `/reserve` are wired to `src/db/repository.js` (session + reservation
+  persistence), both best-effort - a DB hiccup or unset `DATABASE_URL` degrades to
+  `sessionId`/`reservationId: null` rather than failing a request that already has a real
+  RouteStack result. The one exception: resolving `/reserve`'s `sessionId` parameter is NOT
+  best-effort - a missing/invalid one is a real `404`, since the caller explicitly chose that
+  path over passing the fields directly. `saved_preferences` isn't read/written from any route
+  yet (no UI to drive it).
 
 ## RouteStack integration notes
 

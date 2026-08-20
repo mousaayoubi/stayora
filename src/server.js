@@ -11,10 +11,11 @@ app.use(express.json());
 app.post("/chat", async (req, res) => {
   const requestId = newRequestId();
   const message = req.body?.message;
+  const travelerId = req.body?.travelerId;
 
   let result;
   try {
-    result = await handleChat(message);
+    result = await handleChat(message, travelerId);
   } catch (err) {
     const code = err instanceof OrchestratorError ? err.code : "UNKNOWN";
     const status = err instanceof OrchestratorError ? errorStatus(code) : 500;
@@ -42,6 +43,7 @@ app.post("/chat", async (req, res) => {
     intent: result.intent,
     hotelCount: result.search?.count ?? result.search?.result?.length ?? null,
     correlationId: result.search?.correlationId ?? null,
+    sessionId: result.sessionId ?? null,
     enrichedHotelIds: result.enriched?.map((h) => h.hotelId) ?? [],
     enrichedErrors: result.enriched?.filter((h) => h.error).length ?? 0,
     recommendedTopHotelId: result.recommendation?.ranked?.[0]?.hotelId ?? null,
@@ -54,11 +56,12 @@ app.post("/chat", async (req, res) => {
 });
 
 // Deliberately separate from /chat: reserving a specific room is a
-// structured action against an existing search session (hotelId, roomId,
-// correlationId/token from a prior /chat response), not a new free-text
-// question. Two-phase by design - see reserve.js - so the UI's
-// "confirm-before-book" step is a real second request, not just a client-
-// side checkbox in front of a call that would have booked either way.
+// structured action against an existing search session (either a sessionId
+// from a prior /chat response, or hotelId/roomId/correlationId/token
+// passed directly), not a new free-text question. Two-phase by design -
+// see reserve.js - so the UI's "confirm-before-book" step is a real second
+// request, not just a client-side checkbox in front of a call that would
+// have booked either way.
 app.post("/reserve", async (req, res) => {
   const requestId = newRequestId();
   const body = req.body ?? {};
@@ -77,6 +80,7 @@ app.post("/reserve", async (req, res) => {
       timestamp: new Date().toISOString(),
       requestId,
       route: "reserve",
+      sessionId: body.sessionId ?? null,
       hotelId: body.hotelId,
       roomId: body.roomId,
       confirm: Boolean(body.confirm),
@@ -92,6 +96,8 @@ app.post("/reserve", async (req, res) => {
     timestamp: new Date().toISOString(),
     requestId,
     route: "reserve",
+    sessionId: body.sessionId ?? null,
+    reservationId: result.reservationId ?? null,
     hotelId: body.hotelId,
     roomId: body.roomId,
     confirm: Boolean(body.confirm),

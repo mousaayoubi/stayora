@@ -239,14 +239,48 @@ confirmed (second call updated the existing row, didn't duplicate it); the `sess
 CHECK constraint confirmed rejecting `checkOut < checkIn`. All verification rows deleted
 afterward - the schema is live and empty, ready for real use.
 
+### Repository wired into /chat and /reserve
+
+`/chat` now persists a `sessions` row right after a successful RouteStack search (best-effort -
+a DB hiccup or unset `DATABASE_URL` degrades to `sessionId: null` rather than failing a request
+that already has a real search result). Accepts an optional `travelerId` in the request body to
+tag the session (still anonymous - no accounts, just an opaque client-generated UUID).
+
+`/reserve` gained a second way to identify what's being booked: pass `sessionId` (from a prior
+`/chat` response) instead of `correlationId`/`token`/`checkIn`/`checkOut` directly - those get
+resolved from the persisted session. The explicit-fields form still works unchanged (useful when
+`DATABASE_URL` isn't set, or a session wasn't persisted). Unlike session persistence,
+**resolving `sessionId` is NOT best-effort** - a missing/invalid one is a real `404
+SESSION_NOT_FOUND`, since there's nothing to fall back to once the caller has chosen that path.
+
+Reservation persistence tracks the two-phase flow directly: phase 1 creates a `reservations` row
+(`status: 'price_checked'`) and returns its `reservationId`; passing that same `reservationId`
+back on the phase-2 (`confirm: true`) call updates the *same* row to `'ready_for_payment'` +
+`checkout_url` rather than creating a duplicate. Reservation writes are best-effort like session
+writes - a persistence failure degrades to `reservationId: null`/unchanged rather than blocking
+the price check or payment link.
+
+**Verified live end to end**, real round trip: `/chat` (with `travelerId`) → persisted `sessions`
+row confirmed in Supabase → `/reserve` phase 1 using **only** `sessionId` (no correlationId/
+token/dates passed) → real revalidated price + a `reservations` row created → phase 2 with
+`confirm: true` + the same `reservationId` → real payment URL + the *same* row updated to
+`ready_for_payment` (`updated_at > created_at`, `listReservationsBySession` confirmed exactly 1
+row, not 2). `SESSION_NOT_FOUND` (404) confirmed for a bogus `sessionId`. All verification data
+cleaned up afterward.
+
+One false alarm during verification, not a bug: an early sessionId-path test failed with
+RouteStack's `"pricecheck resolver not data found"` - looked like a wiring bug at first, but a
+fresh back-to-back retry with no delay succeeded, and a same-timing test using explicit fields
+(no sessionId) also succeeded - pointing to RouteStack's own rate cache expiring during the
+extra inspection steps between calls, not anything wrong with sessionId resolution.
+
 ### Still to come (Day 2)
 
-1. **Wiring the repository into the live request path** - `/chat` doesn't call `createSession`
-   yet, `/reserve` doesn't call `createReservation`/`updateReservationStatus` yet. The schema and
-   data-access layer are built and verified, but nothing in the running app persists to Postgres
-   yet - that's the natural next step before the UI needs session state to survive a page reload.
-2. **React + Tailwind chat UI**: message thread, comparison cards showing the ranked
+1. **React + Tailwind chat UI**: message thread, comparison cards showing the ranked
    recommendation, confirm-before-book flow calling `/reserve` twice (check price, then
-   confirm) - not started. No auth UI, per original scope.
-3. Wiring `get_booking_info` into a "did the payment go through" check somewhere (UI polling
+   confirm) using the `sessionId` from `/chat` - not started. No auth UI, per original scope.
+2. Wiring `get_booking_info` into a "did the payment go through" check somewhere (UI polling
    after handing off to the payment URL, most likely) - not started.
+3. `saved_preferences` isn't read or written from any live route yet - no endpoint asks for or
+   uses a traveler's saved preferences. Natural fit once the UI exists (e.g. a preferences panel,
+   or Recommend reading them to skip re-asking on a returning traveler's second session).
