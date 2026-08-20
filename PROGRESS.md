@@ -59,6 +59,28 @@ Each `result[]` entry: `id`, `name`, `providerName`, `starRating` (nullable), `o
 (`{freeBreakfast, halfBoard, fullBoard, refundable, freeCancellation}`), `contact.address`,
 `reviews`, `mainamenity[]`. This is what Day 2's Recommend agent ranks/displays over.
 
+### `get_rates` / `get_policy` — verified live against two real hotels
+
+Both work correctly. `get_rates` returns full hotel content (images, amenities, geo,
+descriptions) plus per-room rate groups (price, board basis, bed types, availability).
+`get_policy` (after a fix - see below) returns a hotel-level "know before you go" policy text
+block plus per-room-rate `refundable` (boolean) / `refundability` (`"Refundable"` /
+`"NonRefundable"`) flags.
+
+Confirmed the response shape genuinely varies by hotel/provider - one hotel nested policy text
+under `content.policies`, another under `content.eanRating.policies`; one nested rates under
+`rooms.groups[]`, another under `availability.groups[]`. This validates `extractPolicy.js`'s
+generic tree-walk approach over hardcoding a fixed path - a fixed path would have broken on the
+second hotel.
+
+**Bug found and fixed:** `extractPolicySnippets` only collected `string`/`number` leaf values,
+but the real policy signals are mostly **booleans** (`refundable: false`, `freeCancellation:
+true`) - silently dropped before the fix. It also missed `refundability` because the regex only
+matched the literal substring `"refundable"`, not `"refund"`. Fixed both, and matched keys with
+an object value (e.g. `policies: {know_before_you_go: "..."}`) are now collected as a whole
+instead of only being recursed into (which lost the text since the child key
+`know_before_you_go` doesn't itself look policy-related).
+
 ### Deviations from the original plan (RouteStack's real behavior vs. its own docs)
 
 - RouteStack's API is namespaced under `/mcp/*` HTTP endpoints (a REST API, not a live MCP
@@ -66,8 +88,7 @@ Each `result[]` entry: `id`, `name`, `providerName`, `starRating` (nullable), `o
   orchestrator.
 - **No dedicated policy endpoint.** `get_policy` is a best-effort field-name scan
   (`src/mcp/extractPolicy.js`) over the same `get-hotel-details-and-rates` payload `get_rates`
-  uses. Not yet exercised live (Day 1 only wires `search_hotels` into the orchestrator) - do a
-  live check before trusting it for Day 2's Recommend agent.
+  uses - see above, now verified live and working.
 - **No `create_booking` endpoint.** The real Day 2/3 Reserve flow is `revalidate` (reprice) →
   `get-payment-url` (a deep link to an external payment portal) → traveler pays there →
   `get-booking-info` to poll status. Reserve won't get a synchronous "booked" confirmation from
@@ -78,9 +99,8 @@ Each `result[]` entry: `id`, `name`, `providerName`, `starRating` (nullable), `o
 
 1. `.env` already has working real credentials for both Anthropic and RouteStack - just
    `npm install && npm start`.
-2. `get_rates`/`get_policy` are built but not yet exercised live or wired into the orchestrator
-   - do a live check of their actual response shape (same "docs vs. reality" caution as above)
-   before building the Recommend agent's ranking logic on top of them.
+2. `get_rates`/`get_policy` are built and verified live (see above) but not yet wired into the
+   orchestrator - Day 1 only wires Understand → `search_hotels`.
 3. Then proceed per the original Day 2 plan: RAG layer, Recommend agent, Reserve agent (adjusted
    for the revalidate → payment-URL → poll flow above, not a direct booking call), Postgres
    schema, React+Tailwind chat UI.
