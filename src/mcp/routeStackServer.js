@@ -231,11 +231,20 @@ server.registerTool(
       checkIn: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
       checkOut: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
       publishedRate: z.number().positive().optional(),
+      routestackExternalUserId: z
+        .string()
+        .optional()
+        .describe("Our own reservationId, so RouteStack's order record can be correlated back to it."),
     },
   },
-  async (args) => {
+  async ({ routestackExternalUserId, ...args }) => {
     try {
-      const result = await getPaymentUrl(args);
+      const result = await getPaymentUrl({
+        ...args,
+        // RouteStack's field name is snake_case; ours stays camelCase like
+        // every other tool input for consistency with the rest of this schema.
+        ...(routestackExternalUserId ? { routestack_external_userid: routestackExternalUserId } : {}),
+      });
       return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
     } catch (error) {
       return toolError(error);

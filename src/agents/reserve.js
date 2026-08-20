@@ -26,7 +26,12 @@
  * silently continue past.
  */
 import { callRouteStackTool, McpUnavailableError } from "../mcp/client.js";
-import { getSessionById, createReservation, updateReservationStatus } from "../db/repository.js";
+import {
+  getSessionById,
+  createReservation,
+  updateReservationStatus,
+  getReservationById,
+} from "../db/repository.js";
 import { DatabaseNotConfiguredError } from "../db/pool.js";
 
 export class ReserveError extends Error {
@@ -40,10 +45,12 @@ export class ReserveError extends Error {
 const STATUS_BY_CODE = {
   VALIDATION_FAILED: 400,
   SESSION_NOT_FOUND: 404,
+  RESERVATION_NOT_FOUND: 404,
   DATABASE_NOT_CONFIGURED: 503,
   MCP_UNAVAILABLE: 503,
   REVALIDATE_FAILED: 502,
   PAYMENT_URL_FAILED: 502,
+  BOOKING_INFO_FAILED: 502,
 };
 
 export function errorStatus(code) {
@@ -152,7 +159,24 @@ export async function reserve(params, options = {}) {
 
   const payment = await callTool(
     "get_payment_url",
-    { hotelId, hotelName, correlationId, token, recommendationId, roomId, checkIn, checkOut, publishedRate },
+    {
+      hotelId,
+      hotelName,
+      correlationId,
+      token,
+      recommendationId,
+      roomId,
+      checkIn,
+      checkOut,
+      publishedRate,
+      // Tags RouteStack's own order record with our reservationId, per
+      // their docs ("Optional external caller reference to persist on the
+      // eventual orders row") - useful for their support/debugging even
+      // though their API gives us no way to query bookings by it ourselves
+      // (list-bookings needs a memberId we don't have; get-booking-info
+      // needs their bookingId directly - see checkBookingStatus below).
+      routestackExternalUserId: reservationId ?? undefined,
+    },
     metrics,
     "PAYMENT_URL_FAILED"
   );
@@ -224,6 +248,92 @@ async function persistReservationStatus(reservationId, fields) {
     console.error("Failed to persist reservation status, continuing without it:", err.message);
   }
   return reservationId ?? null;
+}
+
+/**
+ * Checks whether a reservation's payment actually went through, via
+ * get_booking_info. RouteStack's real flow has no webhook/redirect back to
+ * us once the traveler pays on their portal (get_payment_url's response
+ * has no bookingId, and get-booking-info needs one) - so this only works
+ * once a bookingId is known, either passed in directly (e.g. the traveler
+ * read it off RouteStack's payment confirmation) or already stored on the
+ * reservation from an earlier call to this same function. Without one,
+ * this returns the reservation's last known status rather than erroring -
+ * "no booking id yet" is an expected state right after generating a
+ * payment link, not a failure.
+ *
+ * @param {object} params
+ * @param {string} params.reservationId
+ * @param {string} [params.bookingId] RouteStack's booking reference, if the caller has one.
+ */
+export async function checkBookingStatus({ reservationId, bookingId } = {}) {
+  if (!reservationId) {
+    throw new ReserveError("Missing required field: reservationId", "VALIDATION_FAILED");
+  }
+
+  let reservation;
+  try {
+    reservation = await getReservationById(reservationId);
+  } catch (err) {
+    if (err instanceof DatabaseNotConfiguredError) {
+      throw new ReserveError(err.message, "DATABASE_NOT_CONFIGURED");
+    }
+    throw new ReserveError(
+      `Failed to look up reservationId ${reservationId}: ${err.message}`,
+      "RESERVATION_NOT_FOUND"
+    );
+  }
+  if (!reservation) {
+    throw new ReserveError(`No reservation found for reservationId ${reservationId}.`, "RESERVATION_NOT_FOUND");
+  }
+
+  const effectiveBookingId = bookingId || reservation.route_stack_booking_id;
+  if (!effectiveBookingId) {
+    return {
+      reservationId,
+      status: reservation.status,
+      needsBookingId: true,
+      message:
+        "No RouteStack booking id known yet. Once payment completes, RouteStack shows/emails " +
+        "a booking reference - pass it as bookingId to check real confirmation status.",
+    };
+  }
+
+  const bookingInfo = await callTool("get_booking_info", { bookingId: effectiveBookingId }, undefined, "BOOKING_INFO_FAILED");
+
+  // RouteStack's docs only show a "not found" failure example for this
+  // endpoint - no confirmed field names for what a real booking's status
+  // looks like. Read defensively for anything status-shaped rather than
+  // assuming a field name, and only move our own status forward on a
+  // recognizable value - an unrecognized one just leaves it unchanged
+  // rather than guessing.
+  const rawStatus = bookingInfo?.status ?? bookingInfo?.bookingStatus ?? bookingInfo?.state ?? null;
+  const normalizedStatus = normalizeBookingStatus(rawStatus);
+
+  try {
+    await updateReservationStatus(reservationId, {
+      routeStackBookingId: effectiveBookingId,
+      status: normalizedStatus,
+    });
+  } catch (err) {
+    console.error("Failed to persist booking status, continuing without it:", err.message);
+  }
+
+  return {
+    reservationId,
+    status: normalizedStatus ?? reservation.status,
+    bookingInfo,
+    needsBookingId: false,
+  };
+}
+
+function normalizeBookingStatus(rawStatus) {
+  if (typeof rawStatus !== "string") return null;
+  const s = rawStatus.toLowerCase();
+  if (s.includes("confirm")) return "confirmed";
+  if (s.includes("cancel")) return "cancelled";
+  if (s.includes("expir")) return "expired";
+  return null;
 }
 
 async function callTool(name, args, metrics, errorCode) {

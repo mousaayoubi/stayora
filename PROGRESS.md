@@ -340,11 +340,36 @@ options: (a) it may be editable directly on RouteStack's payment page once there
 checking; (b) otherwise this needs reporting to whoever administers the RouteStack sandbox, since
 it's their endpoint silently mismatching the room it just confirmed.
 
+### get_booking_info wired into a payment status check
+
+`checkBookingStatus` (`src/agents/reserve.js`) + `POST /reserve/status` + a status-check
+affordance under each card's payment link in the UI (`BookingStatusCheck` in `HotelCard.jsx`).
+
+**The real constraint that shapes this feature**: RouteStack's `get-payment-url` response has no
+`bookingId`, and there's no webhook/redirect back to Stayora once a traveler pays on their
+portal. `list-bookings` needs a `memberId` we don't have (no auth system - see the "no full auth
+system" scope decision). So `get_booking_info` (which needs a `bookingId`) can only ever be
+called once a booking reference is known - either typed in by the traveler (RouteStack shows/
+emails one after payment) or already stored from an earlier successful check. `needsBookingId:
+true` is the expected, normal response right after generating a payment link, not an error state
+- the UI shows the reservation's last known status in that case rather than treating it as broken.
+
+Also added: `get_payment_url` now passes `routestack_external_userid` (our `reservationId`),
+using the one correlation hook RouteStack's own docs mention ("Optional external caller
+reference to persist on the eventual orders row") - lets their side trace an order back to our
+reservation even though their API gives *us* no way to query bookings by it.
+
+**Verified live end to end**: real chat → reserve phase 1 → phase 2 (real `reservationId` +
+`checkoutUrl`) → `POST /reserve/status` with just `reservationId` → clean `200`,
+`needsBookingId: true`, reservation's current status returned (not an error) → same call with a
+made-up `bookingId` → real RouteStack `502` (`"bookinginfo no data found"`, matching their
+documented not-found example exactly) → confirmed in Postgres that the failed lookup did **not**
+corrupt the reservation's stored status/booking id. Client rebuilt cleanly (not re-verified in a
+real browser - same caveat as the rest of the UI, see above).
+
 ### Still to come
 
-1. Wiring `get_booking_info` into a "did the payment go through" check somewhere (UI polling
-   after handing off to the payment URL, most likely) - not started.
-2. `saved_preferences` isn't read or written from any live route yet - no endpoint asks for or
+1. `saved_preferences` isn't read or written from any live route yet - no endpoint asks for or
    uses a traveler's saved preferences. Natural fit once there's a preferences panel, or
    Recommend reading them to skip re-asking on a returning traveler's second session.
-3. A real room-picker per hotel (the UI currently auto-books the cheapest room only).
+2. A real room-picker per hotel (the UI currently auto-books the cheapest room only).

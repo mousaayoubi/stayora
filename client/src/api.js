@@ -39,6 +39,11 @@ export function reserveRoom(params) {
   return post("/reserve", params);
 }
 
+/** @param {{reservationId: string, bookingId?: string}} params */
+export function checkBookingStatus(params) {
+  return post("/reserve/status", params);
+}
+
 const TRAVELER_ID_KEY = "stayora.travelerId";
 
 /**

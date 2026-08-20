@@ -86,6 +86,12 @@ row moves from `price_checked` to `ready_for_payment` rather than a duplicate be
 Deliberately two calls, not a flag a client could accidentally set: see "Reserve agent" in
 `PROGRESS.md`.
 
+`POST /reserve/status` with `{reservationId, bookingId?}` checks whether a reservation's payment
+actually completed. Without `bookingId`, returns the reservation's last known status and
+`needsBookingId: true` - RouteStack has no webhook back to us, so this is a normal response right
+after generating a payment link, not an error. Pass the booking reference RouteStack shows/
+emails after payment to get a real status via `get_booking_info`.
+
 `npm run mcp-server` runs the RouteStack MCP server standalone (stdio) for debugging with an
 MCP inspector, separate from the Express app spawning it automatically.
 

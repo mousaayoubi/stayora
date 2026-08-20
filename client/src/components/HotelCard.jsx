@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { reserveRoom, ApiError } from "../api.js";
+import { reserveRoom, checkBookingStatus, ApiError } from "../api.js";
 import { hotelDisplay, cheapestRoom, anyRefundable, stripHtml } from "../hotelData.js";
 
 /**
@@ -164,14 +164,17 @@ export default function HotelCard({ rankEntry, searchHotel, enrichedHotel, sessi
           )}
 
           {phase === "ready_for_payment" && checkoutUrl && (
-            <a
-              href={checkoutUrl}
-              target="_blank"
-              rel="noreferrer"
-              className="block w-full rounded-lg bg-emerald-600 py-2 text-center text-xs font-semibold text-white hover:bg-emerald-700"
-            >
-              Complete payment (RouteStack) →
-            </a>
+            <div className="space-y-2">
+              <a
+                href={checkoutUrl}
+                target="_blank"
+                rel="noreferrer"
+                className="block w-full rounded-lg bg-emerald-600 py-2 text-center text-xs font-semibold text-white hover:bg-emerald-700"
+              >
+                Complete payment (RouteStack) →
+              </a>
+              <BookingStatusCheck reservationId={reservationId} />
+            </div>
           )}
 
           {phase === "error" && (
@@ -187,6 +190,69 @@ export default function HotelCard({ rankEntry, searchHotel, enrichedHotel, sessi
           )}
         </div>
       </div>
+    </div>
+  );
+}
+
+/**
+ * RouteStack has no webhook back to us once a traveler pays on their
+ * portal - see reserve.js's checkBookingStatus for why this needs the
+ * booking reference typed in by hand (from RouteStack's payment
+ * confirmation) rather than polling automatically. `needsBookingId: true`
+ * is the normal, expected response right after generating a payment link -
+ * not an error state.
+ */
+function BookingStatusCheck({ reservationId }) {
+  const [bookingId, setBookingId] = useState("");
+  const [checking, setChecking] = useState(false);
+  const [result, setResult] = useState(null);
+  const [error, setError] = useState(null);
+
+  async function check() {
+    setChecking(true);
+    setError(null);
+    try {
+      const res = await checkBookingStatus({ reservationId, bookingId: bookingId.trim() || undefined });
+      setResult(res);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Something went wrong.");
+    } finally {
+      setChecking(false);
+    }
+  }
+
+  return (
+    <div className="rounded-lg border border-slate-200 p-2">
+      <p className="text-xs text-slate-500">
+        Paid already? RouteStack shows/emails a booking reference after checkout - enter it to confirm.
+      </p>
+      <div className="mt-1.5 flex gap-1.5">
+        <input
+          value={bookingId}
+          onChange={(e) => setBookingId(e.target.value)}
+          placeholder="Booking reference (optional)"
+          className="min-w-0 flex-1 rounded border border-slate-300 px-2 py-1 text-xs focus:border-stayora-navy focus:outline-none"
+        />
+        <button
+          onClick={check}
+          disabled={checking}
+          className="shrink-0 rounded bg-slate-100 px-2 py-1 text-xs font-semibold text-slate-700 hover:bg-slate-200 disabled:opacity-50"
+        >
+          {checking ? "Checking..." : "Check status"}
+        </button>
+      </div>
+
+      {error && <p className="mt-1 text-xs text-red-600">{error}</p>}
+
+      {result?.needsBookingId && (
+        <p className="mt-1 text-xs text-slate-400">
+          No booking reference on file yet - current status: <span className="font-medium">{result.status}</span>
+        </p>
+      )}
+
+      {result && !result.needsBookingId && (
+        <p className="mt-1 text-xs font-medium text-emerald-700">Status: {result.status}</p>
+      )}
     </div>
   );
 }

@@ -5,7 +5,12 @@ import { fileURLToPath } from "node:url";
 
 import { env } from "./config/env.js";
 import { handleChat, OrchestratorError, errorStatus } from "./orchestrator/orchestrator.js";
-import { reserve, ReserveError, errorStatus as reserveErrorStatus } from "./agents/reserve.js";
+import {
+  reserve,
+  checkBookingStatus,
+  ReserveError,
+  errorStatus as reserveErrorStatus,
+} from "./agents/reserve.js";
 import { logRequest, newRequestId } from "./logging/logger.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -123,6 +128,52 @@ app.post("/reserve", async (req, res) => {
     confirm: Boolean(body.confirm),
     success: true,
     phase: result.phase,
+  });
+
+  res.json({ ok: true, requestId, ...result });
+});
+
+// Checks whether a reservation's payment actually completed, via
+// get_booking_info. RouteStack's own flow has no webhook back to us once
+// the traveler pays on their portal - see reserve.js's checkBookingStatus
+// for why this only works once a bookingId is known (passed here, or
+// already stored from an earlier call). No bookingId yet is a normal,
+// expected response (`needsBookingId: true`), not an error.
+app.post("/reserve/status", async (req, res) => {
+  const requestId = newRequestId();
+  const body = req.body ?? {};
+
+  let result;
+  try {
+    result = await checkBookingStatus(body);
+  } catch (err) {
+    const code = err instanceof ReserveError ? err.code : "UNKNOWN";
+    const status = err instanceof ReserveError ? reserveErrorStatus(code) : 500;
+    if (!(err instanceof ReserveError)) {
+      console.error(`[${requestId}] unexpected reserve status failure:`, err);
+    }
+
+    await logRequest({
+      timestamp: new Date().toISOString(),
+      requestId,
+      route: "reserve/status",
+      reservationId: body.reservationId,
+      success: false,
+      errorCode: code,
+      error: err.message,
+    });
+
+    return res.status(status).json({ ok: false, requestId, error: err.message, code });
+  }
+
+  await logRequest({
+    timestamp: new Date().toISOString(),
+    requestId,
+    route: "reserve/status",
+    reservationId: body.reservationId,
+    needsBookingId: result.needsBookingId,
+    status: result.status,
+    success: true,
   });
 
   res.json({ ok: true, requestId, ...result });
