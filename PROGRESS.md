@@ -316,6 +316,30 @@ via `vite` 5.x - allows a malicious website to read the dev server's responses).
 not present in the production build Express serves; not fixed here since the fix bumps to
 `vite@8` (breaking) for a capstone timeline. Worth revisiting past Day 3.
 
+### Known RouteStack bug: payment page shows 2 adults regardless of the actual party size
+
+Found live by Mousa clicking through the real UI (the first real click-through this project
+had): asked for 1 adult, the RouteStack payment page showed 2. Traced end to end to confirm
+this is **not** a bug in our code:
+
+1. `search_hotels`/`get_rates` correctly requested `{adults: 1}` throughout.
+2. RouteStack's own `get_rates` response confirms it: the chosen room's `occupancies` field says
+   `numOfAdults: 1`.
+3. `get_payment_url`'s request schema (RouteStack's own OpenAPI spec) has **no adults/occupancy
+   field at all** - only `hotelId`, `roomId`, `recommendationId`, `token`, dates. There is
+   nothing our request could pass differently.
+4. Decoded the actual payment-portal payload RouteStack generates (gzip+base64 in the URL's
+   `query` param - `zlib.gunzipSync` on the base64-decoded bytes). It hardcodes `"adults": 2` and
+   `"travellers": [{"numOfAdults": 2}]`, even though the same payload's `roomId` correctly
+   references the 1-adult room.
+
+This is a bug/hardcoded default in RouteStack's `get-payment-url` endpoint itself - it doesn't
+derive the portal's traveler count from the room it was actually asked to generate a link for.
+Nothing in Stayora's control fixes this (their API gives us no field to override it). Two real
+options: (a) it may be editable directly on RouteStack's payment page once there - worth
+checking; (b) otherwise this needs reporting to whoever administers the RouteStack sandbox, since
+it's their endpoint silently mismatching the room it just confirmed.
+
 ### Still to come
 
 1. Wiring `get_booking_info` into a "did the payment go through" check somewhere (UI polling
