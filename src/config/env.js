@@ -12,7 +12,16 @@ const REQUIRED = [
   "ROUTESTACK_SECRET_KEY",
 ];
 
-const missing = REQUIRED.filter((key) => !process.env[key]);
+// dotenv only splits .env on "\n" - a file saved with Windows CRLF line
+// endings (easy to end up with when editing on Windows) leaves a trailing
+// "\r" stuck to every value. That's invisible in a terminal but breaks
+// exact-match checks like RouteStack's apiKey lookup and HMAC signing, so
+// every value is trimmed before use rather than trusting the raw parse.
+function trimmed(key) {
+  return process.env[key]?.trim();
+}
+
+const missing = REQUIRED.filter((key) => !trimmed(key));
 if (missing.length > 0) {
   console.error(
     `Missing required environment variable(s): ${missing.join(", ")}.\n` +
@@ -22,9 +31,9 @@ if (missing.length > 0) {
 }
 
 export const env = {
-  anthropicApiKey: process.env.ANTHROPIC_API_KEY,
-  routeStackBaseUrl: process.env.ROUTESTACK_BASE_URL.replace(/\/+$/, ""),
-  routeStackApiKey: process.env.ROUTESTACK_API_KEY,
-  routeStackSecretKey: process.env.ROUTESTACK_SECRET_KEY,
-  port: Number(process.env.PORT) || 3000,
+  anthropicApiKey: trimmed("ANTHROPIC_API_KEY"),
+  routeStackBaseUrl: trimmed("ROUTESTACK_BASE_URL").replace(/\/+$/, ""),
+  routeStackApiKey: trimmed("ROUTESTACK_API_KEY"),
+  routeStackSecretKey: trimmed("ROUTESTACK_SECRET_KEY"),
+  port: Number(trimmed("PORT")) || 3000,
 };
