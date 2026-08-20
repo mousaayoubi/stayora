@@ -8,13 +8,15 @@
     "start": "node src/server.js",
     "dev": "node --watch src/server.js",
     "mcp-server": "node src/mcp/routeStackServer.js",
-    "index": "node src/rag/buildIndex.js"
+    "index": "node src/rag/buildIndex.js",
+    "db:migrate": "node src/db/migrate.js"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.32.1",
     "@modelcontextprotocol/sdk": "^1.30.0",
     "dotenv": "^16.4.5",
     "express": "^4.21.2",
+    "pg": "^8.23.0",
     "zod": "^4.4.3"
   }
 }

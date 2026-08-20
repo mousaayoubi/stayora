@@ -54,8 +54,12 @@ npm install
 cp .env.example .env   # fill in ANTHROPIC_API_KEY, ROUTESTACK_API_KEY, ROUTESTACK_SECRET_KEY
 npm run index           # builds data/vectors.json from knowledge/ - needs Ollama running
                          # locally with `ollama pull nomic-embed-text`
+npm run db:migrate      # applies db/schema.sql - needs DATABASE_URL set (free Neon/Supabase)
 npm start
 ```
+
+`db:migrate` and Postgres in general are not required to start the server or use `/chat`/
+`/reserve` - nothing in the live request path persists to the database yet (see PROGRESS.md).
 
 `POST /chat` with `{ "message": "a hotel in Dubai for 2 next weekend" }` returns the parsed
 intent, the full live RouteStack search result, an `enriched` array (top 3 hotels with rates +
@@ -87,6 +91,27 @@ MCP inspector, separate from the Express app spawning it automatically.
 - `retrieveTopChunks` falls back to plain keyword search if Ollama is unreachable or the best
   semantic score is below threshold - Recommend still runs (just with weaker grounding) rather
   than failing outright if the local embedding service is down.
+
+## Postgres notes
+
+- `db/schema.sql` is the whole schema (3 tables, idempotent DDL) - `npm run db:migrate` applies
+  it. No accounts/passwords anywhere (`traveler_id` is a bare anonymous UUID) - "no full auth
+  system" is a named 3-day scope decision.
+- **Supabase's direct-connection host is IPv6-only** (`db.<ref>.supabase.co`) - resolved to
+  `ENOTFOUND` on a network without IPv6 routing. Use the **connection pooler** host instead
+  (Supabase dashboard -> Project Settings -> Database -> "Connection pooling" tab), which
+  supports IPv4. Session pooler over transaction pooler for this app specifically: it's a
+  long-running server holding a persistent `pg.Pool`, not serverless, so transaction pooler's
+  scaling benefit doesn't apply and its limitations (no session-level `SET`, etc.) aren't worth
+  the risk for a multi-statement DDL script like `schema.sql`.
+- **`pg`'s default `DATE` parser returns a JS `Date` at local midnight**, which shifts the
+  calendar date backward once serialized to JSON (`toISOString()` is UTC) - found live,
+  `check_in: "2026-08-28"` round-tripped as `"2026-08-27T21:00:00.000Z"`. Fixed in
+  `src/db/pool.js` by returning the raw `YYYY-MM-DD` string instead of a `Date` object for DATE
+  columns - matches the plain-string dates used everywhere else in the app already.
+- Nothing in `/chat` or `/reserve` writes to Postgres yet - `src/db/repository.js` is built and
+  verified live (insert/read/update/upsert/constraint enforcement all confirmed against a real
+  Supabase DB) but not yet called from the request path. That's the natural next step.
 
 ## RouteStack integration notes
 

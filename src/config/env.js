@@ -36,4 +36,9 @@ export const env = {
   routeStackApiKey: trimmed("ROUTESTACK_API_KEY"),
   routeStackSecretKey: trimmed("ROUTESTACK_SECRET_KEY"),
   port: Number(trimmed("PORT")) || 3000,
+  // Not in REQUIRED: nothing in the live request path (/chat, /reserve)
+  // depends on Postgres yet, so a missing DATABASE_URL shouldn't block the
+  // whole server from starting. src/db/pool.js fails fast on its own the
+  // moment something actually tries to use it.
+  databaseUrl: trimmed("DATABASE_URL") || null,
 };

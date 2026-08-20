@@ -195,9 +195,56 @@ without ever touching payment; phase 2 (`confirm: true`) returned a real
 verified: a request missing `correlationId` returns `400 VALIDATION_FAILED` before any
 RouteStack call is made.
 
+### Postgres schema
+
+`db/schema.sql` (3 tables: `sessions`, `reservations`, `saved_preferences` - idempotent, run via
+`npm run db:migrate`) + `src/db/{pool,migrate,repository}.js`. No accounts/passwords anywhere -
+"no full auth system" is a named scope decision, not an oversight; `traveler_id` is a bare
+client-generated UUID (anonymous, e.g. a cookie), not an authenticated identity.
+
+- `sessions`: one row per `/chat` request, holds the parsed intent plus RouteStack's
+  `correlationId`/`token` (needed for any follow-up call in that listing session).
+- `reservations`: one row per room taken through `/reserve`, `status` tracks its two-phase flow
+  directly (`price_checked` → `ready_for_payment` → `confirmed`/`cancelled`/`expired`).
+- `saved_preferences`: one row per `traveler_id`, `traveler_type` mirrors
+  `knowledge/preference-profiles.md`'s archetypes (nullable - `ranking-guide.md` is explicit
+  that Recommend shouldn't force an archetype a request didn't support).
+
+Live database: a free Supabase project. **Two real infra gotchas hit and resolved getting
+connected** (neither is a code bug, both worth remembering for Day 3):
+1. Supabase's **direct connection** host (`db.<ref>.supabase.co`) resolves to an
+   **IPv6-only** address - `ENOTFOUND` on this network (no IPv6 route). Fixed by using
+   Supabase's **connection pooler** host instead (`aws-0-<region>.pooler.supabase.com`), which
+   supports IPv4.
+2. Session pooler (not transaction pooler) was the deliberate choice - this app holds a
+   persistent `pg.Pool` from a long-running server, not serverless/edge functions, so
+   transaction pooler's main benefit (cheap short-lived connections at scale) doesn't apply, and
+   session pooler avoids its real limitations (no session-level `SET`, multi-statement DDL
+   scripts like `schema.sql` are safer under full connection semantics).
+
+**Real bug found and fixed via live verification** (not just "the migration ran"): `pg`'s
+default `DATE` column parser returns a JS `Date` at **local midnight**, which shifts the
+calendar date backward once serialized to JSON (`toISOString()` is always UTC) - `check_in:
+"2026-08-28"` round-tripped through the repository layer came back as
+`"2026-08-27T21:00:00.000Z"`. Fixed in `src/db/pool.js` with
+`types.setTypeParser(types.builtins.DATE, v => v)`, returning the raw `YYYY-MM-DD` string
+instead - matches what the app already produces everywhere else (`understand.js`,
+`search_hotels`), so no reformatting needed on the way back out either. Re-verified live after
+the fix: dates round-trip exactly.
+
+Verified live end to end: `createSession` → `createReservation` →
+`updateReservationStatus` → `getReservationById` → `listReservationsBySession` all confirmed
+against the real Supabase DB; `upsertPreferences`'s `ON CONFLICT (traveler_id)` update path
+confirmed (second call updated the existing row, didn't duplicate it); the `sessions_dates_valid`
+CHECK constraint confirmed rejecting `checkOut < checkIn`. All verification rows deleted
+afterward - the schema is live and empty, ready for real use.
+
 ### Still to come (Day 2)
 
-1. **Postgres schema**: `sessions`, `reservations`, `saved_preferences` - not started.
+1. **Wiring the repository into the live request path** - `/chat` doesn't call `createSession`
+   yet, `/reserve` doesn't call `createReservation`/`updateReservationStatus` yet. The schema and
+   data-access layer are built and verified, but nothing in the running app persists to Postgres
+   yet - that's the natural next step before the UI needs session state to survive a page reload.
 2. **React + Tailwind chat UI**: message thread, comparison cards showing the ranked
    recommendation, confirm-before-book flow calling `/reserve` twice (check price, then
    confirm) - not started. No auth UI, per original scope.
