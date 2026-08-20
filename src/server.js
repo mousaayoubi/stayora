@@ -2,6 +2,7 @@ import express from "express";
 
 import { env } from "./config/env.js";
 import { handleChat, OrchestratorError, errorStatus } from "./orchestrator/orchestrator.js";
+import { reserve, ReserveError, errorStatus as reserveErrorStatus } from "./agents/reserve.js";
 import { logRequest, newRequestId } from "./logging/logger.js";
 
 const app = express();
@@ -47,6 +48,55 @@ app.post("/chat", async (req, res) => {
     recommendationError: result.recommendationError ?? null,
     timings: result.timings,
     metrics: result.metrics,
+  });
+
+  res.json({ ok: true, requestId, ...result });
+});
+
+// Deliberately separate from /chat: reserving a specific room is a
+// structured action against an existing search session (hotelId, roomId,
+// correlationId/token from a prior /chat response), not a new free-text
+// question. Two-phase by design - see reserve.js - so the UI's
+// "confirm-before-book" step is a real second request, not just a client-
+// side checkbox in front of a call that would have booked either way.
+app.post("/reserve", async (req, res) => {
+  const requestId = newRequestId();
+  const body = req.body ?? {};
+
+  let result;
+  try {
+    result = await reserve(body);
+  } catch (err) {
+    const code = err instanceof ReserveError ? err.code : "UNKNOWN";
+    const status = err instanceof ReserveError ? reserveErrorStatus(code) : 500;
+    if (!(err instanceof ReserveError)) {
+      console.error(`[${requestId}] unexpected reserve failure:`, err);
+    }
+
+    await logRequest({
+      timestamp: new Date().toISOString(),
+      requestId,
+      route: "reserve",
+      hotelId: body.hotelId,
+      roomId: body.roomId,
+      confirm: Boolean(body.confirm),
+      success: false,
+      errorCode: code,
+      error: err.message,
+    });
+
+    return res.status(status).json({ ok: false, requestId, error: err.message, code });
+  }
+
+  await logRequest({
+    timestamp: new Date().toISOString(),
+    requestId,
+    route: "reserve",
+    hotelId: body.hotelId,
+    roomId: body.roomId,
+    confirm: Boolean(body.confirm),
+    success: true,
+    phase: result.phase,
   });
 
   res.json({ ok: true, requestId, ...result });

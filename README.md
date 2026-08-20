@@ -20,12 +20,27 @@ User message --> Understand (Claude) --> structured intent
               RAG (ranking-guide, policy-explainers,       Recommend (Claude)
               preference-profiles - Ollama embeddings) --> ranked, tradeoffs
                                                             explained per hotel
+                                                                     |
+                              (traveler picks a hotel + room)       v
+                                                                POST /reserve
+                                                          revalidate (price check)
+                                                                     |
+                                                    confirm:true?  --+-- no --> return price
+                                                                     |          for the human
+                                                                    yes         to look at
+                                                                     v
+                                                       revalidate again + get_payment_url
+                                                                     |
+                                                                     v
+                                                    payment portal deep link (traveler pays)
 ```
 
 `Orchestrator -> Agents -> RAG -> MCP -> RouteStack` is the full architecture from the pitch
 deck, all wired: Understand -> Search -> enrich (rates + cancellation policy for the top 3
 results) -> Recommend (RAG-grounded ranking with an explained tradeoff per hotel - the deck's
-core differentiator). Reserve (revalidate + confirm + book) is next.
+core differentiator) -> Reserve (`POST /reserve`, a separate endpoint: revalidate, require
+explicit `confirm: true`, revalidate again, hand back a payment portal link - see "Booking is
+not a single API call" below for why this isn't a direct booking call).
 
 Reasoning (Understand, Recommend) is Claude throughout. RAG embeddings are the one place this
 app uses a local model (Ollama + `nomic-embed-text`) - a deliberate split, not an inconsistency:
@@ -48,6 +63,12 @@ cancellation policy), and a `recommendation` object: `{ranked: [{hotelId, rank, 
 tradeoff, caveats}], summary}`. A Recommend failure degrades to `recommendation: null` +
 `recommendationError` rather than failing the whole request - the search/enrich results are
 still useful on their own.
+
+`POST /reserve` with `{hotelId, correlationId, token, checkIn, checkOut, roomId,
+recommendationId, publishedRate}` (all from a prior `/chat` response's `enriched[].rates`)
+re-checks the price and returns it - add `confirm: true` (same body) to get a real payment
+portal URL. Deliberately two calls, not a flag a client could accidentally set: see "Reserve
+agent" in `PROGRESS.md`.
 
 `npm run mcp-server` runs the RouteStack MCP server standalone (stdio) for debugging with an
 MCP inspector, separate from the Express app spawning it automatically.

@@ -108,3 +108,32 @@ export async function getHotelDetailsAndRates(params) {
   const data = await post("/mcp/hotel/get-hotel-details-and-rates", params);
   return data.result;
 }
+
+/**
+ * Re-checks price/availability for one specific room recommendation
+ * immediately before payment. RouteStack's docs: "For best results call
+ * revalidate immediately before generating a payment URL" - so this is
+ * called both as its own price-check step and again right before
+ * get-payment-url, not just once.
+ */
+export async function revalidate(params) {
+  const data = await post("/mcp/hotel/revalidate", params);
+  return data.result ?? data;
+}
+
+/**
+ * Generates the external payment portal URL for a specific room
+ * recommendation. This is RouteStack's actual "book" step - there is no
+ * synchronous create_booking call; the traveler completes payment at this
+ * URL and the booking is confirmed on RouteStack's side from there.
+ */
+export async function getPaymentUrl(params) {
+  const data = await post("/mcp/hotel/get-payment-url", params);
+  return data;
+}
+
+/** Fetches booking status/details by RouteStack booking id. */
+export async function getBookingInfo(bookingId) {
+  const data = await post("/mcp/hotel/get-booking-info", { bookingId });
+  return data.result ?? data;
+}

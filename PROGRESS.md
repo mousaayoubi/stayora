@@ -166,12 +166,40 @@ of guessing - exactly the behavior `ranking-guide.md` asked for.
 call (16s, generating a detailed structured response) plus RouteStack search variance (11s this
 run vs. 4s on Day 1's test). UI needs a loading state; this is not going to feel instant.
 
+### Reserve agent
+
+`src/agents/reserve.js` + 3 new MCP tools (`revalidate_rate`, `get_payment_url`,
+`get_booking_info` - `src/mcp/routeStackServer.js`/`routeStackClient.js`) + `POST /reserve`
+(`src/server.js`, deliberately separate from `/chat` - reserving is a structured action against
+an existing search session, not a new free-text question).
+
+Two-phase by construction, not just convention, per the original plan's "re-check price,
+require explicit confirmation, then book":
+
+1. `confirm` not `true` (or omitted): calls `revalidate_rate` only, returns the current price
+   for a human to look at. `get_payment_url` is never called from this path - there is no code
+   path from "check price" to "get a payable link" that skips the flag.
+2. `confirm: true`: revalidates **again** (RouteStack's own guidance: do this immediately before
+   generating a payment URL, not just rely on an earlier check), then calls `get_payment_url`
+   and returns the payment portal deep link.
+
+Adapted from the original plan's "then calls `create_booking`" to RouteStack's real flow (Day
+1 finding: no synchronous booking call exists) - the traveler completes payment at the returned
+URL; `get_booking_info` is available to poll status afterward but isn't wired into `/reserve`
+itself yet (that's UI/Day-3 territory - checking whether a payment actually completed).
+
+**Verified live end to end** against a real room (City Stay Prime Hotel Apartment, Dubai):
+phase 1 returned real revalidated pricing, room description, and cancellation-policy rules
+without ever touching payment; phase 2 (`confirm: true`) returned a real
+`https://travel.routestack.ai/hotel/guests?query=...` payment deep link. Validation also
+verified: a request missing `correlationId` returns `400 VALIDATION_FAILED` before any
+RouteStack call is made.
+
 ### Still to come (Day 2)
 
-1. **Reserve agent**: revalidate (reprice) → `get-payment-url` (external payment portal deep
-   link, not a direct booking call - see Day 1's finding above) → the traveler completes payment
-   there → `get-booking-info` to poll status. Needs explicit confirmation before revalidate/
-   payment-url are called, per the original plan.
-2. **Postgres schema**: `sessions`, `reservations`, `saved_preferences` - not started.
-3. **React + Tailwind chat UI**: message thread, comparison cards showing the ranked
-   recommendation, confirm-before-book flow - not started. No auth UI, per original scope.
+1. **Postgres schema**: `sessions`, `reservations`, `saved_preferences` - not started.
+2. **React + Tailwind chat UI**: message thread, comparison cards showing the ranked
+   recommendation, confirm-before-book flow calling `/reserve` twice (check price, then
+   confirm) - not started. No auth UI, per original scope.
+3. Wiring `get_booking_info` into a "did the payment go through" check somewhere (UI polling
+   after handing off to the payment URL, most likely) - not started.
