@@ -114,8 +114,11 @@ errors. `metrics.mcpCalls: 4` (1 search + 3 rates, as intended - not 7, confirmi
 
 ## Day 2 — "Recommend, reserve, and a face"
 
-**Status: RAG layer + Recommend agent SHIPPED and verified live. Reserve agent, Postgres, UI
-still to come.**
+**Status: RAG layer, Recommend agent, Reserve agent, Postgres schema (wired into `/chat` and
+`/reserve`), and the React+Tailwind UI are all built. Everything except the UI is verified live
+end to end with real data; the UI is verified by build success + code review only (browser
+extension unavailable this session - see its section below) and should be clicked through for
+real before Day 3's demo.**
 
 ### RAG layer
 
@@ -274,13 +277,50 @@ fresh back-to-back retry with no delay succeeded, and a same-timing test using e
 (no sessionId) also succeeded - pointing to RouteStack's own rate cache expiring during the
 extra inspection steps between calls, not anything wrong with sessionId resolution.
 
-### Still to come (Day 2)
+### React + Tailwind chat UI
 
-1. **React + Tailwind chat UI**: message thread, comparison cards showing the ranked
-   recommendation, confirm-before-book flow calling `/reserve` twice (check price, then
-   confirm) using the `sessionId` from `/chat` - not started. No auth UI, per original scope.
-2. Wiring `get_booking_info` into a "did the payment go through" check somewhere (UI polling
+`client/` - a Vite + React + Tailwind app, separate `package.json` (own dependency tree, doesn't
+bloat the API server's). Not a toy static page: real component structure, a real build step,
+Tailwind's actual utility pipeline (not a CDN class dump).
+
+- `App.jsx` holds the message list; `MessageThread.jsx` renders user/assistant bubbles and, for
+  an assistant turn with results, a horizontally-scrolling row of `HotelCard.jsx` - one per
+  `recommendation.ranked` entry (falls back to `enriched`'s plain order if Recommend degraded,
+  same as the backend's own graceful-degradation contract).
+- `HotelCard.jsx` is where the confirm-before-book flow actually lives: each card owns its own
+  `idle -> checking -> revalidated -> confirming -> ready_for_payment` state and calls
+  `/reserve` twice, mirroring `reserve.js`'s two real phases exactly (see `PROGRESS.md`'s Reserve
+  agent section) rather than a client-side flag in front of one call. A card auto-picks the
+  cheapest room for that hotel to book (labeled "cheapest available room" - a deliberate MVP
+  simplification, no room-picker sub-UI yet) and shows the real payment URL as a link once
+  confirmed.
+- `api.js`'s `getTravelerId()` generates and persists a bare anonymous UUID in `localStorage`
+  (no login) - passed as `/chat`'s optional `travelerId` so a returning visitor's sessions group
+  together in Postgres.
+- Dev: `npm run client:dev` runs Vite's dev server (port 5173) proxying `/chat`, `/reserve`,
+  `/health` to Express (port 3000 - run `npm run dev` there too) - see `client/vite.config.js`.
+  Production: `npm run build:client` builds `client/dist`, which `src/server.js` now serves as
+  static files automatically when present - `npm start` alone is then a complete demo.
+
+**Verification note**: the Claude-in-Chrome browser extension wasn't connected this session, so
+this was NOT visually clicked through in a real browser - verified instead via a clean
+production build (`vite build`, 36 modules, no errors/warnings), confirming Express serves the
+built `index.html`/JS/CSS at their exact built sizes, and careful code review against the exact
+response shapes `/chat`/`/reserve` are already live-verified to return (earlier in this
+session). Mousa should open `http://localhost:3000` and click through the real flow before
+treating this as demo-ready - a build succeeding is not the same as a UI actually working
+correctly for a user.
+
+A moderate/high `npm audit` advisory exists in `client/`'s devDependencies (`esbuild` <=0.24.2
+via `vite` 5.x - allows a malicious website to read the dev server's responses). Dev-server-only,
+not present in the production build Express serves; not fixed here since the fix bumps to
+`vite@8` (breaking) for a capstone timeline. Worth revisiting past Day 3.
+
+### Still to come
+
+1. Wiring `get_booking_info` into a "did the payment go through" check somewhere (UI polling
    after handing off to the payment URL, most likely) - not started.
-3. `saved_preferences` isn't read or written from any live route yet - no endpoint asks for or
-   uses a traveler's saved preferences. Natural fit once the UI exists (e.g. a preferences panel,
-   or Recommend reading them to skip re-asking on a returning traveler's second session).
+2. `saved_preferences` isn't read or written from any live route yet - no endpoint asks for or
+   uses a traveler's saved preferences. Natural fit once there's a preferences panel, or
+   Recommend reading them to skip re-asking on a returning traveler's second session.
+3. A real room-picker per hotel (the UI currently auto-books the cheapest room only).

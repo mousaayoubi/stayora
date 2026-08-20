@@ -1,12 +1,32 @@
 import express from "express";
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { env } from "./config/env.js";
 import { handleChat, OrchestratorError, errorStatus } from "./orchestrator/orchestrator.js";
 import { reserve, ReserveError, errorStatus as reserveErrorStatus } from "./agents/reserve.js";
 import { logRequest, newRequestId } from "./logging/logger.js";
 
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const CLIENT_DIST_DIR = path.resolve(__dirname, "..", "client", "dist");
+
 const app = express();
 app.use(express.json());
+
+// Serves the built React UI (npm run build:client) as static files when
+// present, so `npm start` alone is enough for a full demo. Not required for
+// the API itself - during client development, run the Vite dev server
+// (npm run dev --prefix client) instead, which proxies /chat and /reserve
+// to this same Express server (see client/vite.config.js).
+if (fs.existsSync(CLIENT_DIST_DIR)) {
+  app.use(express.static(CLIENT_DIST_DIR));
+} else {
+  console.warn(
+    "client/dist not found - run `npm run build:client` to serve the React UI. " +
+      "API routes (/chat, /reserve, /health) work regardless."
+  );
+}
 
 app.post("/chat", async (req, res) => {
   const requestId = newRequestId();

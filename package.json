@@ -9,7 +9,10 @@
     "dev": "node --watch src/server.js",
     "mcp-server": "node src/mcp/routeStackServer.js",
     "index": "node src/rag/buildIndex.js",
-    "db:migrate": "node src/db/migrate.js"
+    "db:migrate": "node src/db/migrate.js",
+    "client:install": "npm install --prefix client",
+    "client:dev": "npm run dev --prefix client",
+    "build:client": "npm run build --prefix client"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.32.1",
