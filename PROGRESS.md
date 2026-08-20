@@ -112,17 +112,66 @@ parallel), all 3 hotels enriched successfully with real rates and 3–14 policy 
 errors. `metrics.mcpCalls: 4` (1 search + 3 rates, as intended - not 7, confirming the
 "don't double-fetch" design works).
 
-### To resume Day 2 (Sun Aug 23)
+## Day 2 — "Recommend, reserve, and a face"
 
-1. `.env` already has working real credentials for both Anthropic and RouteStack - just
-   `npm install && npm start`.
-2. Understand → Search → enrich(top 3, rates+policy) is fully wired and live-verified end to
-   end. What's still a bare provider-order top-3, not a real recommendation: no RAG, no
-   preference-based ranking, no tradeoff explanation - that's Day 2's Recommend agent.
-3. `enrichTopHotels`'s ~12s latency (mostly Understand + search + 3 parallel ~400KB rate
-   payloads) is fine for a demo but worth keeping in mind for UI design (show a loading state,
-   don't assume sub-second).
-4. Then proceed per the original Day 2 plan: RAG layer, Recommend agent (replace `enrichTopHotels`'s
-   "top 3 in provider order" with real ranking + explained tradeoffs), Reserve agent (adjusted
-   for the revalidate → payment-URL → poll flow above, not a direct booking call), Postgres
-   schema, React+Tailwind chat UI.
+**Status: RAG layer + Recommend agent SHIPPED and verified live. Reserve agent, Postgres, UI
+still to come.**
+
+### RAG layer
+
+- `knowledge/{ranking-guide,policy-explainers,preference-profiles}.md` — Stayora's actual domain
+  knowledge: how to weigh price vs. cancellation-vs-trip-distance vs. location vs. amenities,
+  what refundable/pay-at-hotel/mandatory-fee terms actually mean, and what business/family/
+  budget/luxury travelers each weigh most.
+- `src/rag/{loadDocuments,chunk,similarity,retrieve,buildIndex}.js` — adapted directly from
+  `Week3Day5`'s verified RAG pipeline (load → chunk → embed → store; semantic search with a
+  keyword-search fallback).
+- `src/rag/ollamaEmbeddings.js` — embeddings via local Ollama (`nomic-embed-text`), confirmed
+  already running on this machine from `Week3Day5`. **Reasoning stays 100% Claude** - this is
+  the one deliberate exception, scoped strictly to embedding static knowledge docs, which isn't
+  agentic and carries none of the local-model tool-calling reliability risk the original
+  Claude-over-Ollama decision was about.
+- `npm run index` builds `data/vectors.json` (17 chunks from the 3 docs).
+
+**Real bug found and fixed:** the chunker (adapted from Week3Day5) never lets a chunk span two
+Markdown headings. Without that fix, `preference-profiles.md`'s short per-archetype sections
+(~80-100 words) were smaller than the 160-word chunk window, so a chunk labeled "Business
+traveler" (the heading active at its first word) was mostly "Family traveler" text underneath -
+broke both the section citation and retrieval quality. Verified live before/after: a "family
+trip, free cancellation" query surfaced the Business-traveler chunk before the fix, the correct
+Family-traveler chunk after.
+
+### Recommend agent
+
+`src/agents/recommend.js` — takes the enriched shortlist, retrieves relevant RAG context for the
+traveler's message, and asks Claude (forced tool call, `claude-sonnet-5`) to rank the shortlist
+with a named tradeoff and caveats per hotel. Summarizes each ~400KB `get_rates` payload down to
+the handful of facts a ranking decision needs (price, star rating, distance, refundability mix,
+amenities, cleaned "know before you go" text) before it ever reaches the prompt.
+
+Wired into `orchestrator.js` after `enrichTopHotels`. A Recommend failure degrades to
+`recommendation: null` + `recommendationError` rather than failing the whole request - the
+search/enrich results are still useful without a ranking on top.
+
+**Verified live end to end**, family-trip query ("2 adults and 2 kids... we want free
+cancellation since plans might change"): `HTTP 200` in ~34s (`understandMs: 3031, searchMs:
+11403, enrichMs: 3538, recommendMs: 15672`). The ranking was genuinely good - ranked the
+all-refundable hotel first specifically because of the stated cancellation priority, correctly
+distinguished "hotel-level freeCancellation" from "this specific room is refundable" for the
+other two (grounded in `policy-explainers.md`'s explicit distinction), and every hotel's caveats
+honestly flagged missing data (no confirmed family amenities, no policy text available) instead
+of guessing - exactly the behavior `ranking-guide.md` asked for.
+
+**Latency note:** ~34s end to end is workable for a demo but real - mostly Claude's Recommend
+call (16s, generating a detailed structured response) plus RouteStack search variance (11s this
+run vs. 4s on Day 1's test). UI needs a loading state; this is not going to feel instant.
+
+### Still to come (Day 2)
+
+1. **Reserve agent**: revalidate (reprice) → `get-payment-url` (external payment portal deep
+   link, not a direct booking call - see Day 1's finding above) → the traveler completes payment
+   there → `get-booking-info` to poll status. Needs explicit confirmation before revalidate/
+   payment-url are called, per the original plan.
+2. **Postgres schema**: `sessions`, `reservations`, `saved_preferences` - not started.
+3. **React + Tailwind chat UI**: message thread, comparison cards showing the ranked
+   recommendation, confirm-before-book flow - not started. No auth UI, per original scope.

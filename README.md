@@ -4,7 +4,7 @@ A premium agentic hotel booking assistant that searches, explains, verifies, and
 one trusted conversation. Solo capstone by Mousa Ayoubi, built over three non-consecutive days
 (Thu Aug 20 / Sun Aug 23 / Mon Aug 24, 2026). See `PROGRESS.md` for day-by-day status.
 
-## Architecture (Day 1 slice)
+## Architecture
 
 ```
 User message --> Understand (Claude) --> structured intent
@@ -17,29 +17,55 @@ User message --> Understand (Claude) --> structured intent
                                   enrich (get_rates + policy)
                                              |
                                              v
-                               priced, policy-annotated shortlist
+              RAG (ranking-guide, policy-explainers,       Recommend (Claude)
+              preference-profiles - Ollama embeddings) --> ranked, tradeoffs
+                                                            explained per hotel
 ```
 
 `Orchestrator -> Agents -> RAG -> MCP -> RouteStack` is the full architecture from the pitch
-deck. Day 1 wires Understand -> Search -> a lightweight enrichment pass (rates + cancellation
-policy for the top 3 results, in whatever order RouteStack returned them - not a ranked
-recommendation). RAG-backed ranking/tradeoff explanations (Recommend) and revalidate + confirm +
-book (Reserve) land Day 2.
+deck, all wired: Understand -> Search -> enrich (rates + cancellation policy for the top 3
+results) -> Recommend (RAG-grounded ranking with an explained tradeoff per hotel - the deck's
+core differentiator). Reserve (revalidate + confirm + book) is next.
+
+Reasoning (Understand, Recommend) is Claude throughout. RAG embeddings are the one place this
+app uses a local model (Ollama + `nomic-embed-text`) - a deliberate split, not an inconsistency:
+embedding a handful of static knowledge docs isn't agentic (no tool-calling reliability at
+stake), so there's no reason to pay for a cloud embeddings API for it.
 
 ## Setup
 
 ```bash
 npm install
 cp .env.example .env   # fill in ANTHROPIC_API_KEY, ROUTESTACK_API_KEY, ROUTESTACK_SECRET_KEY
+npm run index           # builds data/vectors.json from knowledge/ - needs Ollama running
+                         # locally with `ollama pull nomic-embed-text`
 npm start
 ```
 
 `POST /chat` with `{ "message": "a hotel in Dubai for 2 next weekend" }` returns the parsed
-intent, the full live RouteStack search result, and an `enriched` array: the top 3 hotels with
-rates and a best-effort cancellation policy attached.
+intent, the full live RouteStack search result, an `enriched` array (top 3 hotels with rates +
+cancellation policy), and a `recommendation` object: `{ranked: [{hotelId, rank, headline,
+tradeoff, caveats}], summary}`. A Recommend failure degrades to `recommendation: null` +
+`recommendationError` rather than failing the whole request - the search/enrich results are
+still useful on their own.
 
 `npm run mcp-server` runs the RouteStack MCP server standalone (stdio) for debugging with an
 MCP inspector, separate from the Express app spawning it automatically.
+
+## RAG notes
+
+- `knowledge/*.md` (ranking-guide, policy-explainers, preference-profiles) is the whole corpus -
+  small and static by design for a 3-day capstone, re-index with `npm run index` after editing.
+- `src/rag/chunk.js`'s chunker never lets a chunk span two Markdown headings, even when a
+  section is shorter than `chunkSize` (the common case here) - found live: with the original
+  word-count-only chunker, a chunk labeled "Business traveler" (the heading active at its first
+  word) actually contained mostly "Family traveler" text, because `preference-profiles.md`'s
+  short per-archetype sections are smaller than the 160-word chunk window. That silently broke
+  both the section citation and retrieval quality (a "family trip" query surfaced the Business
+  traveler chunk). Fixed by chunking within each section independently.
+- `retrieveTopChunks` falls back to plain keyword search if Ollama is unreachable or the best
+  semantic score is below threshold - Recommend still runs (just with weaker grounding) rather
+  than failing outright if the local embedding service is down.
 
 ## RouteStack integration notes
 

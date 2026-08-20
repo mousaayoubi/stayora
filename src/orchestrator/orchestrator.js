@@ -1,14 +1,13 @@
 /**
- * Orchestrator v1 (Day 1 scope): Understand -> Search -> enrich top results
- * with rates/policy.
+ * Orchestrator v1: Understand -> Search -> enrich top results with
+ * rates/policy -> Recommend (RAG-backed ranking + tradeoff explanations).
  *
- * Recommend (RAG-backed ranking + tradeoff explanations) and Reserve
- * (revalidate + confirm + book) are Day 2 additions - enrichTopHotels below
- * takes the top few results in whatever order RouteStack returned them, not
- * a ranked recommendation.
+ * Reserve (revalidate + confirm + book) is still to come - this takes a
+ * plain-English message all the way to a ranked, explained shortlist.
  */
 import { understand, UnderstandError } from "../agents/understand.js";
 import { enrichTopHotels } from "../agents/enrich.js";
+import { recommend, RecommendError } from "../agents/recommend.js";
 import { callRouteStackTool, McpUnavailableError } from "../mcp/client.js";
 
 export class OrchestratorError extends Error {
@@ -99,7 +98,25 @@ export async function handleChat(message) {
   );
   timings.enrichMs = Date.now() - enrichStart;
 
+  // A Recommend failure (Claude error, RAG index missing, etc.) shouldn't
+  // sink the whole request - the search + enriched shortlist already
+  // succeeded and are useful on their own. Degrade to no recommendation
+  // rather than a 500 for something the traveler can still act on.
+  let recommendation = null;
+  let recommendationError = null;
+  if (enriched.length > 0) {
+    const recommendStart = Date.now();
+    try {
+      recommendation = await recommend(message, intent, search.result ?? [], enriched, { metrics });
+    } catch (err) {
+      if (!(err instanceof RecommendError)) throw err;
+      console.error("Recommend step failed, degrading to unranked results:", err.message);
+      recommendationError = err.message;
+    }
+    timings.recommendMs = Date.now() - recommendStart;
+  }
+
   timings.totalMs = Date.now() - start;
 
-  return { intent, search, enriched, timings, metrics };
+  return { intent, search, enriched, recommendation, recommendationError, timings, metrics };
 }

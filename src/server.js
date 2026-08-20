@@ -43,6 +43,8 @@ app.post("/chat", async (req, res) => {
     correlationId: result.search?.correlationId ?? null,
     enrichedHotelIds: result.enriched?.map((h) => h.hotelId) ?? [],
     enrichedErrors: result.enriched?.filter((h) => h.error).length ?? 0,
+    recommendedTopHotelId: result.recommendation?.ranked?.[0]?.hotelId ?? null,
+    recommendationError: result.recommendationError ?? null,
     timings: result.timings,
     metrics: result.metrics,
   });
