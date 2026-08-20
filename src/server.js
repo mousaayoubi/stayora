@@ -41,6 +41,8 @@ app.post("/chat", async (req, res) => {
     intent: result.intent,
     hotelCount: result.search?.count ?? result.search?.result?.length ?? null,
     correlationId: result.search?.correlationId ?? null,
+    enrichedHotelIds: result.enriched?.map((h) => h.hotelId) ?? [],
+    enrichedErrors: result.enriched?.filter((h) => h.error).length ?? 0,
     timings: result.timings,
     metrics: result.metrics,
   });

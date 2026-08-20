@@ -18,9 +18,13 @@ plain-English query, verified against production with real credentials.**
 - `src/agents/understand.js` — NL → structured intent JSON via a forced Claude tool call
   (`claude-sonnet-5`). Resolves relative dates against today, defaults missing occupancy/dates
   and reports what it assumed in `missingInfo`.
-- `src/orchestrator/orchestrator.js` — wires Understand → `search_hotels`, typed errors
-  (`UNDERSTAND_FAILED` 422, `MCP_UNAVAILABLE` 503, `ROUTESTACK_SEARCH_FAILED` /
-  `SEARCH_PARSE_FAILED` 502).
+- `src/agents/enrich.js` — takes `search_hotels`' top 3 results (provider order, not a ranked
+  recommendation) and fetches rates + a locally-derived cancellation policy for each, one
+  `get_rates` call per hotel (not also `get_policy` - see "Efficiency" note below).
+- `src/orchestrator/orchestrator.js` — wires Understand → `search_hotels` → `enrichTopHotels`,
+  typed errors (`UNDERSTAND_FAILED` 422, `MCP_UNAVAILABLE` 503, `ROUTESTACK_SEARCH_FAILED` /
+  `SEARCH_PARSE_FAILED` 502). A single hotel's enrichment failing doesn't fail the whole
+  request - it's recorded as `{hotelId, error}` in the `enriched` array instead.
 - `src/server.js` — `POST /chat`, `GET /health`, structured JSONL logging to `data/logs.jsonl`
   (same pattern as `Week3Day5/src/logging/logger.js`).
 
@@ -95,12 +99,30 @@ instead of only being recursed into (which lost the text since the child key
   RouteStack the way the original plan assumed — UI/orchestrator design for Day 2 needs to
   account for a handoff-and-poll flow instead.
 
+### `get_rates`/`get_policy` wired into the orchestrator
+
+`handleChat` now runs Understand → `search_hotels` → `enrichTopHotels` (top 3 results, calls
+`get_rates` once per hotel and derives policy locally from that same payload via
+`extractPolicySnippets` - see README's "Efficiency" note for why `get_policy` isn't also called
+per hotel). Response gains an `enriched: [{hotelId, name, rates, policy, error?}]` array.
+
+Verified live end to end: `POST /chat` for the same Dubai query → `HTTP 200` in ~12s
+(`understandMs: 4674, searchMs: 4241, enrichMs: 3094` - the 3 `get_rates` calls run in
+parallel), all 3 hotels enriched successfully with real rates and 3–14 policy entries each, no
+errors. `metrics.mcpCalls: 4` (1 search + 3 rates, as intended - not 7, confirming the
+"don't double-fetch" design works).
+
 ### To resume Day 2 (Sun Aug 23)
 
 1. `.env` already has working real credentials for both Anthropic and RouteStack - just
    `npm install && npm start`.
-2. `get_rates`/`get_policy` are built and verified live (see above) but not yet wired into the
-   orchestrator - Day 1 only wires Understand → `search_hotels`.
-3. Then proceed per the original Day 2 plan: RAG layer, Recommend agent, Reserve agent (adjusted
+2. Understand → Search → enrich(top 3, rates+policy) is fully wired and live-verified end to
+   end. What's still a bare provider-order top-3, not a real recommendation: no RAG, no
+   preference-based ranking, no tradeoff explanation - that's Day 2's Recommend agent.
+3. `enrichTopHotels`'s ~12s latency (mostly Understand + search + 3 parallel ~400KB rate
+   payloads) is fine for a demo but worth keeping in mind for UI design (show a loading state,
+   don't assume sub-second).
+4. Then proceed per the original Day 2 plan: RAG layer, Recommend agent (replace `enrichTopHotels`'s
+   "top 3 in provider order" with real ranking + explained tradeoffs), Reserve agent (adjusted
    for the revalidate → payment-URL → poll flow above, not a direct booking call), Postgres
    schema, React+Tailwind chat UI.

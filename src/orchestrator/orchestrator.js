@@ -1,11 +1,14 @@
 /**
- * Orchestrator v1 (Day 1 scope): Understand -> Search.
+ * Orchestrator v1 (Day 1 scope): Understand -> Search -> enrich top results
+ * with rates/policy.
  *
- * Recommend (RAG-backed ranking) and Reserve (revalidate + confirm + book)
- * are Day 2 additions - this only takes a plain-English message to a live
- * RouteStack hotel search result.
+ * Recommend (RAG-backed ranking + tradeoff explanations) and Reserve
+ * (revalidate + confirm + book) are Day 2 additions - enrichTopHotels below
+ * takes the top few results in whatever order RouteStack returned them, not
+ * a ranked recommendation.
  */
 import { understand, UnderstandError } from "../agents/understand.js";
+import { enrichTopHotels } from "../agents/enrich.js";
 import { callRouteStackTool, McpUnavailableError } from "../mcp/client.js";
 
 export class OrchestratorError extends Error {
@@ -82,7 +85,21 @@ export async function handleChat(message) {
     throw err;
   }
 
+  const enrichStart = Date.now();
+  const enriched = await enrichTopHotels(
+    search.result ?? [],
+    {
+      correlationId: search.correlationId,
+      token: search.token,
+      checkIn: intent.checkIn,
+      checkOut: intent.checkOut,
+      rooms: intent.rooms,
+    },
+    { metrics }
+  );
+  timings.enrichMs = Date.now() - enrichStart;
+
   timings.totalMs = Date.now() - start;
 
-  return { intent, search, timings, metrics };
+  return { intent, search, enriched, timings, metrics };
 }
